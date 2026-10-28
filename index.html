@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Block Editor</title>
+<script>
+window.MathJax = { tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']] } };
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+<style>
+:root { --bg:#f5f6f8; --paper:#fff; --ink:#202124; --muted:#6b7280; --line:#e5e7eb; --accent:#2563eb; }
+* { box-sizing:border-box; }
+body { margin:0; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); }
+header { position:sticky; top:0; z-index:5; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 20px; background:#fff; border-bottom:1px solid var(--line); }
+.brand { font-weight:750; letter-spacing:-.03em; font-size:18px; }
+.actions { display:flex; gap:8px; flex-wrap:wrap; }
+button, select { font:inherit; cursor:pointer; border:1px solid var(--line); background:#fff; color:var(--ink); border-radius:9px; padding:8px 12px; }
+button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+button:hover { filter:brightness(.97); }
+main { max-width:900px; margin:32px auto; padding:0 18px 80px; }
+.document { background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:0 4px 20px #00000008; padding:clamp(20px,5vw,56px); min-height:70vh; }
+.doc-title { width:100%; border:0; outline:0; font-size:32px; font-weight:750; padding:0 0 24px; letter-spacing:-.04em; }
+.block { position:relative; margin:12px 0; border:1px solid transparent; border-radius:10px; padding:12px; }
+.block:hover, .block:focus-within { border-color:#dbe3ef; background:#fcfdff; }
+.block-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+.block-kind { font-size:11px; color:#64748b; text-transform:uppercase; font-weight:750; letter-spacing:.08em; }
+.block-tools { display:flex; gap:4px; opacity:.55; }
+.block:hover .block-tools { opacity:1; }
+.block-tools button { padding:3px 7px; font-size:12px; border-radius:6px; }
+textarea, .text-input { width:100%; resize:vertical; border:0; outline:0; background:transparent; font:inherit; line-height:1.75; color:inherit; }
+textarea { min-height:100px; }
+.text-input { min-height:40px; }
+.math-preview { padding:12px; border-radius:8px; background:#f8fafc; overflow:auto; min-height:48px; }
+.code-area { font:13px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace; background:#111827; color:#e5e7eb; border-radius:8px; padding:14px; min-height:130px; }
+.code-preview { white-space:pre-wrap; overflow-wrap:anywhere; font:13px/1.65 ui-monospace,monospace; background:#111827; color:#e5e7eb; padding:14px; border-radius:8px; }
+.add-row { display:flex; flex-wrap:wrap; gap:8px; padding:12px 0; }
+.status { color:var(--muted); font-size:12px; }
+.hint { color:var(--muted); font-size:12px; margin-top:8px; }
+@media(max-width:600px){ header{padding:10px 12px} .brand{font-size:16px} .document{padding:18px} .doc-title{font-size:26px} }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">✦ My Block Editor</div>
+  <div class="actions">
+    <span class="status" id="status" style="align-self:center">브라우저에 자동 저장</span>
+    <button id="exportBtn">내보내기</button>
+    <button class="primary" id="addBtn">+ 블록 추가</button>
+  </div>
+</header>
+<main>
+  <div class="document">
+    <input class="doc-title" id="docTitle" value="새 문서" aria-label="문서 제목">
+    <div id="blocks"></div>
+    <div class="add-row">
+      <button data-add="text">＋ 텍스트</button>
+      <button data-add="math">＋ 수식</button>
+      <button data-add="code">＋ 코드</button>
+    </div>
+    <div class="hint">텍스트·수식·코드 블록을 추가해 작성하세요. 내용은 이 브라우저에 자동 저장됩니다.</div>
+  </div>
+</main>
+<script>
+const STORAGE_KEY = "my-block-editor-v1";
+let state = { title:"새 문서", blocks:[
+  {id:crypto.randomUUID(),type:"text",content:"여기에 내용을 작성하세요. 블록을 추가해 텍스트, 수식, 코드를 섞어 쓸 수 있습니다."},
+  {id:crypto.randomUUID(),type:"math",content:"\\[ f(x) = \\frac{1}{\\sqrt{2\\pi}}e^{-x^2/2} \\]"},
+  {id:crypto.randomUUID(),type:"code",content:"import torch\\n\\nmodel = torch.nn.Linear(10, 1)\\nprint(model)"}
+]};
+const root = document.getElementById("blocks");
+const titleInput = document.getElementById("docTitle");
+const status = document.getElementById("status");
+let saveTimer;
+function save() {
+  clearTimeout(saveTimer);
+  status.textContent = "저장 중…";
+  saveTimer = setTimeout(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    status.textContent = "저장됨";
+  }, 250);
+}
+function escapeHTML(s) {
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function addBlock(type, afterId=null) {
+  const block = {id:crypto.randomUUID(), type, content: type==="math" ? "\\[ x^2 + y^2 = z^2 \\]" : ""};
+  if(afterId) {
+    const idx = state.blocks.findIndex(b=>b.id===afterId);
+    state.blocks.splice(idx+1,0,block);
+  } else state.blocks.push(block);
+  render(); save();
+  const el = document.querySelector(`[data-id="${block.id}"] textarea`);
+  if(el) el.focus();
+}
+function render() {
+  root.innerHTML = "";
+  state.blocks.forEach((block,index) => {
+    const el = document.createElement("section");
+    el.className = "block";
+    el.dataset.id = block.id;
+    const labels = {text:"텍스트",math:"수식 · LaTeX",code:"코드"};
+    el.innerHTML = `
+      <div class="block-head">
+        <span class="block-kind">${labels[block.type]}</span>
+        <div class="block-tools">
+          <select aria-label="블록 유형 변경" class="type-select">
+            <option value="text" ${block.type==="text"?"selected":""}>텍스트</option>
+            <option value="math" ${block.type==="math"?"selected":""}>수식</option>
+            <option value="code" ${block.type==="code"?"selected":""}>코드</option>
+          </select>
+          <button title="위로 이동" data-action="up">↑</button>
+          <button title="아래로 이동" data-action="down">↓</button>
+          <button title="블록 복제" data-action="duplicate">복제</button>
+          <button title="블록 삭제" data-action="delete">×</button>
+        </div>
+      </div>
+      <textarea spellcheck="${block.type==="code"?"false":"true"}" class="${block.type==="code"?"code-area":""}" aria-label="${labels[block.type]} 입력"></textarea>
+      ${block.type==="math" ? '<div class="hint">LaTeX 수식을 입력하세요. 예: \\[ \\alpha + \\beta = \\gamma \\]</div><div class="math-preview"></div>' : ""}
+      ${block.type==="code" ? '<div class="hint">코드를 작성하는 입력 블록입니다. (실행 기능은 포함하지 않음)</div><div class="code-preview"></div>' : ""}
+    `;
+    const ta = el.querySelector("textarea");
+    ta.value = block.content;
+    ta.addEventListener("input", () => {
+      block.content = ta.value;
+      if(block.type==="math") updateMath(el, block.content);
+      if(block.type==="code") el.querySelector(".code-preview").textContent = block.content;
+      save();
+    });
+    const select = el.querySelector(".type-select");
+    select.addEventListener("change", () => {
+      block.type = select.value;
+      render(); save();
+    });
+    el.querySelectorAll("[data-action]").forEach(btn => btn.addEventListener("click", () => {
+      const action = btn.dataset.action;
+      const idx = state.blocks.findIndex(b=>b.id===block.id);
+      if(action==="delete") state.blocks.splice(idx,1);
+      if(action==="up" && idx>0) [state.blocks[idx-1],state.blocks[idx]]=[state.blocks[idx],state.blocks[idx-1]];
+      if(action==="down" && idx<state.blocks.length-1) [state.blocks[idx+1],state.blocks[idx]]=[state.blocks[idx],state.blocks[idx+1]];
+      if(action==="duplicate") state.blocks.splice(idx+1,0,{...block,id:crypto.randomUUID()});
+      render(); save();
+    }));
+    root.appendChild(el);
+    if(block.type==="math") updateMath(el,block.content);
+    if(block.type==="code") el.querySelector(".code-preview").textContent=block.content;
+  });
+}
+function updateMath(el,content) {
+  const preview=el.querySelector(".math-preview");
+  if(!preview) return;
+  preview.textContent=content;
+  if(window.MathJax && MathJax.typesetPromise) MathJax.typesetPromise([preview]).catch(()=>{});
+}
+titleInput.addEventListener("input",()=>{state.title=titleInput.value;save();});
+document.querySelectorAll("[data-add]").forEach(btn=>btn.addEventListener("click",()=>addBlock(btn.dataset.add)));
+document.getElementById("addBtn").addEventListener("click",()=>{
+  const type=prompt("추가할 블록 유형을 입력하세요: text / math / code","text");
+  if(["text","math","code"].includes(type)) addBlock(type);
+});
+document.getElementById("exportBtn").addEventListener("click",()=>{
+  const title=(state.title||"document").replace(/[\\/:*?"<>|]/g,"_");
+  const body=state.blocks.map(b=>{
+    if(b.type==="math") return b.content;
+    if(b.type==="code") return "```\\n"+b.content+"\\n```";
+    return b.content;
+  }).join("\\n\\n");
+  const blob=new Blob(["# "+state.title+"\\n\\n"+body],{type:"text/markdown;charset=utf-8"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a"); a.href=url; a.download=title+".md"; a.click();
+  URL.revokeObjectURL(url);
+});
+try {
+  const saved=localStorage.getItem(STORAGE_KEY);
+  if(saved) state=JSON.parse(saved);
+} catch(e) {}
+titleInput.value=state.title||"새 문서";
+render();
+</script>
+</body>
+</html>
